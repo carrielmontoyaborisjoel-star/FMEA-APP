@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Prototipo FMEA</title>
+  <style>
+    body { font-family: Arial, sans-serif; padding: 20px; }
+    input, select, textarea { width: 100%; margin: 4px 0; padding: 6px; }
+    button { margin: 10px 5px 10px 0; padding: 8px 16px; }
+    table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+    th, td { border: 1px solid #ccc; padding: 8px; text-align: left; }
+    th { background-color: #f2f2f2; cursor: pointer; user-select: none; }
+    th:hover { background-color: #e0e0e0; }
+    .btn-group { margin-top: 10px; }
+    #buscar { width: 300px; padding: 8px; margin-bottom: 15px; }
+    .sort-indicator { margin-left: 4px; color: #666; }
+  </style>
+</head>
+<body>
+  <h1>Prototipo FMEA - Proceso</h1>
+  
+  <form id="fmeaForm">
+    <input type="hidden" id="editId" value="">
+    <input type="text" id="proceso" placeholder="Paso del proceso" required>
+    <input type="text" id="modoFallo" placeholder="Modo de fallo" required>
+    <input type="text" id="efecto" placeholder="Efecto del fallo" required>
+    <input type="text" id="causa" placeholder="Causa raíz" required>
+    
+    <label>Severidad (1–10):</label>
+    <input type="number" id="severidad" min="1" max="10" value="5" required>
+    
+    <label>Ocurrencia (1–10):</label>
+    <input type="number" id="ocurrencia" min="1" max="10" value="5" required>
+    
+    <label>Detección (1–10):</label>
+    <input type="number" id="deteccion" min="1" max="10" value="5" required>
+    
+    <input type="text" id="accion" placeholder="Acción recomendada">
+    <input type="text" id="responsable" placeholder="Responsable">
+    <input type="date" id="fechaAccion">
+    <select id="estado">
+      <option value="Pendiente">Pendiente</option>
+      <option value="En progreso">En progreso</option>
+      <option value="Completado">Completado</option>
+    </select>
+
+    <button type="submit">Guardar modo de fallo</button>
+    <button type="button" id="btnClear">Limpiar</button>
+  </form>
+
+  <div class="btn-group">
+    <input type="text" id="buscar" placeholder="Buscar en FMEA (proceso, fallo, efecto, causa, acción, responsable...)">
+    <button onclick="exportarCSV()">Exportar a CSV</button>
+  </div>
+
+  <h2>Modos de Fallo Registrados</h2>
+  <table id="tablaFmea">
+    <thead>
+      <tr>
+        <th onclick="ordenarPor('proceso')">Proceso</th>
+        <th onclick="ordenarPor('modoFallo')">Fallo</th>
+        <th onclick="ordenarPor('efecto')">Efecto</th>
+        <th onclick="ordenarPor('rpn')">RPN <span class="sort-indicator" id="sortRpnIndicator"></span></th>
+        <th onclick="ordenarPor('accion')">Acción</th>
+        <th onclick="ordenarPor('estado')">Estado</th>
+        <th>Acciones</th>
+      </tr>
+    </thead>
+    <tbody id="tablaBody"></tbody>
+  </table>
+
+  <script>
+    let fmeas = JSON.parse(localStorage.getItem('fmeas')) || [];
+    const form = document.getElementById('fmeaForm');
+    const tablaBody = document.getElementById('tablaBody');
+    const editIdField = document.getElementById('editId');
+    const inputBuscar = document.getElementById('buscar');
+
+    // Estado de ordenamiento
+    let sortField = 'rpn';      // campo por defecto
+    let sortAsc = false;        // false = descendente (RPN alto primero)
+
+    function calcularRPN(s, o, d) {
+      return s * o * d;
+    }
+
+    function guardarFmea(e) {
+      e.preventDefault();
+      const id = editIdField.value ? parseInt(editIdField.value) : Date.now();
+      const nuevo = {
+        id,
+        proceso: document.getElementById('proceso').value,
+        modoFallo: document.getElementById('modoFallo').value,
+        efecto: document.getElementById('efecto').value,
+        causa: document.getElementById('causa').value,
+        severidad: parseInt(document.getElementById('severidad').value),
+        ocurrencia: parseInt(document.getElementById('ocurrencia').value),
+        deteccion: parseInt(document.getElementById('deteccion').value),
+        rpn: calcularRPN(
+          parseInt(document.getElementById('severidad').value),
+          parseInt(document.getElementById('ocurrencia').value),
+          parseInt(document.getElementById('deteccion').value)
+        ),
+        accion: document.getElementById('accion').value,
+        responsable: document.getElementById('responsable').value,
+        fechaAccion: document.getElementById('fechaAccion').value,
+        estado: document.getElementById('estado').value
+      };
+
+      if (editIdField.value) {
+        fmeas = fmeas.map(f => f.id === id ? nuevo : f);
+      } else {
+        fmeas.push(nuevo);
+      }
+
+      localStorage.setItem('fmeas', JSON.stringify(fmeas));
+      renderTabla();
+      form.reset();
+      editIdField.value = '';
+    }
+
+    function coincideConBusqueda(fmea, texto) {
+      if (!texto) return true;
+      const t = texto.toLowerCase();
+      return (
+        fmea.proceso.toLowerCase().includes(t) ||
+        fmea.modoFallo.toLowerCase().includes(t) ||
+        fmea.efecto.toLowerCase().includes(t) ||
+        fmea.causa.toLowerCase().includes(t) ||
+        (fmea.accion && fmea.accion.toLowerCase().includes(t)) ||
+        (fmea.responsable && fmea.responsable.toLowerCase().includes(t)) ||
+        fmea.estado.toLowerCase().includes(t)
+      );
+    }
+
+    function ordenarLista(lista) {
+      return lista.sort((a, b) => {
+        let valA = a[sortField];
+        let valB = b[sortField];
+
+        // Si es texto, convertir a string y minúsculas
+        if (typeof valA === 'string') {
+          valA = valA.toLowerCase();
+          valB = valB.toLowerCase();
+        }
+
+        if (valA < valB) return sortAsc ? -1 : 1;
+        if (valA > valB) return sortAsc ? 1 : -1;
+        return 0;
+      });
+    }
+
+    function actualizarIndicadores() {
+      // Limpiar todos
+      document.querySelectorAll('.sort-indicator').forEach(el => el.textContent = '');
+      // Mostrar en la columna activa
+      if (sortField === 'rpn') {
+        document.getElementById('sortRpnIndicator').textContent = sortAsc ? '↑' : '↓';
+      }
+      // Opcional: agregar a otras columnas si lo deseas
+    }
+
+    function renderTabla() {
+      const textoBusqueda = inputBuscar.value.trim();
+      let listaFiltrada = fmeas.filter(f => coincideConBusqueda(f, textoBusqueda));
+      listaFiltrada = ordenarLista([...listaFiltrada]); // clonar antes de ordenar
+
+      tablaBody.innerHTML = '';
+      if (listaFiltrada.length === 0) {
+        tablaBody.innerHTML = `<tr><td colspan="7" style="text-align:center;">No se encontraron resultados.</td></tr>`;
+        return;
+      }
+
+      listaFiltrada.forEach(f => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td>${f.proceso}</td>
+          <td>${f.modoFallo}</td>
+          <td>${f.efecto}</td>
+          <td><strong>${f.rpn}</strong></td>
+          <td>${f.accion || '-'}</td>
+          <td>${f.estado}</td>
+          <td>
+            <button onclick="editarFmea(${f.id})">Editar</button>
+            <button onclick="eliminarFmea(${f.id})">Eliminar</button>
+          </td>
+        `;
+        tablaBody.appendChild(tr);
+      });
+
+      actualizarIndicadores();
+    }
+
+    function ordenarPor(campo) {
+      if (sortField === campo) {
+        sortAsc = !sortAsc; // alternar dirección
+      } else {
+        sortField = campo;
+        // Por defecto, descendente en RPN, ascendente en texto
+        sortAsc = (campo === 'rpn') ? false : true;
+      }
+      renderTabla();
+    }
+
+    function editarFmea(id) {
+      const f = fmeas.find(f => f.id === id);
+      if (!f) return;
+      document.getElementById('editId').value = f.id;
+      document.getElementById('proceso').value = f.proceso;
+      document.getElementById('modoFallo').value = f.modoFallo;
+      document.getElementById('efecto').value = f.efecto;
+      document.getElementById('causa').value = f.causa;
+      document.getElementById('severidad').value = f.severidad;
+      document.getElementById('ocurrencia').value = f.ocurrencia;
+      document.getElementById('deteccion').value = f.deteccion;
+      document.getElementById('accion').value = f.accion || '';
+      document.getElementById('responsable').value = f.responsable || '';
+      document.getElementById('fechaAccion').value = f.fechaAccion || '';
+      document.getElementById('estado').value = f.estado;
+    }
+
+    function eliminarFmea(id) {
+      if (confirm('¿Eliminar este modo de fallo?')) {
+        fmeas = fmeas.filter(f => f.id !== id);
+        localStorage.setItem('fmeas', JSON.stringify(fmeas));
+        renderTabla();
+      }
+    }
+
+    // === EXPORTAR A CSV ===
+    function exportarCSV() {
+      const textoBusqueda = inputBuscar.value.trim();
+      const datosAExportar = textoBusqueda
+        ? fmeas.filter(f => coincideConBusqueda(f, textoBusqueda))
+        : fmeas;
+
+      if (datosAExportar.length === 0) {
+        alert("No hay datos para exportar.");
+        return;
+      }
+
+      // Aplicar mismo orden que en la tabla (opcional pero útil)
+      const datosOrdenados = ordenarLista([...datosAExportar]);
+
+      const headers = [
+        "ID",
+        "Proceso",
+        "Modo de Fallo",
+        "Efecto del Fallo",
+        "Causa Raíz",
+        "Severidad",
+        "Ocurrencia",
+        "Detección",
+        "RPN",
+        "Acción Recomendada",
+        "Responsable",
+        "Fecha Acción",
+        "Estado"
+      ];
+
+      const filas = datosOrdenados.map(f => [
+        f.id,
+        f.proceso.replace(/"/g, '""'),
+        f.modoFallo.replace(/"/g, '""'),
+        f.efecto.replace(/"/g, '""'),
+        f.causa.replace(/"/g, '""'),
+        f.severidad,
+        f.ocurrencia,
+        f.deteccion,
+        f.rpn,
+        (f.accion || "").replace(/"/g, '""'),
+        (f.responsable || "").replace(/"/g, '""'),
+        f.fechaAccion || "",
+        f.estado
+      ]);
+
+      const escaparCSV = (campo) => {
+        if (typeof campo === "string" && (campo.includes(',') || campo.includes('"') || campo.includes('\n'))) {
+          return `"${campo}"`;
+        }
+        return String(campo);
+      };
+
+      const contenido = [
+        headers.map(escaparCSV).join(","),
+        ...filas.map(fila => fila.map(escaparCSV).join(","))
+      ].join("\n");
+
+      const blob = new Blob([contenido], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.setAttribute("hidden", "");
+      a.setAttribute("href", url);
+      a.setAttribute("download", "fmea_export_" + new Date().toISOString().slice(0,10) + ".csv");
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }
+
+    // === Eventos ===
+    document.getElementById('btnClear').addEventListener('click', () => {
+      form.reset();
+      editIdField.value = '';
+    });
+
+    form.addEventListener('submit', guardarFmea);
+    inputBuscar.addEventListener('input', renderTabla);
+
+    window.editarFmea = editarFmea;
+    window.eliminarFmea = eliminarFmea;
+    window.ordenarPor = ordenarPor;
+
+    renderTabla();
+  </script>
+</body>
+</html>
